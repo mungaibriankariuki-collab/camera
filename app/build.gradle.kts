@@ -14,7 +14,7 @@ android {
 
     defaultConfig {
         applicationId = "com.brian.camera"
-        minSdk = 26
+        minSdk = 28
         targetSdk = 35
         versionCode = buildNumber
         versionName = "1.0.$buildNumber"
