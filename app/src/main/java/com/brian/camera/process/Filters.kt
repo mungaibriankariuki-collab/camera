@@ -31,6 +31,22 @@ object Filters {
         }
     }
 
+    // ---- Photographic Styles: tone (contrast/depth) and warmth, -10..10 each ----
+    fun style(tone: Int, warmth: Int): ColorMatrix? {
+        if (tone == 0 && warmth == 0) return null
+        val m = contrast(1f + tone * 0.025f)
+        m.postConcat(sat(1f + tone * 0.015f))
+        m.postConcat(scale(1f + warmth * 0.012f, 1f + warmth * 0.002f, 1f - warmth * 0.014f))
+        return m
+    }
+
+    /** Filter and style together (either may be absent). */
+    fun combined(filter: ColorMatrix?, style: ColorMatrix?): ColorMatrix? = when {
+        filter == null -> style
+        style == null -> filter
+        else -> ColorMatrix(filter).also { it.postConcat(style) }
+    }
+
     // ---- scene optimizer looks ----
     fun scene(scene: String): ColorMatrix? = when (scene) {
         "Food" -> sat(1.3f).also { it.postConcat(scale(1.06f, 1.02f, 0.94f)) }

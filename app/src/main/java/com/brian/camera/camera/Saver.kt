@@ -36,7 +36,7 @@ object Saver {
     }
 
     /** Encodes [bmp] (JPEG, or HEIF when asked and possible), adds EXIF, and publishes it. */
-    fun saveBitmap(ctx: Context, bmp: Bitmap, prefix: String, heif: Boolean, location: Location?): Uri? {
+    fun saveBitmap(ctx: Context, bmp: Bitmap, prefix: String, heif: Boolean, location: Location?, motion: File? = null): Uri? {
         val tmpDir = File(ctx.cacheDir, "out").apply { mkdirs() }
         val name = "${prefix}_${stamp()}"
         if (heif) {
@@ -47,7 +47,8 @@ object Saver {
                 w.start(); w.addBitmap(bmp); w.stop(10_000); w.close()
                 true
             }.getOrDefault(false)
-            if (ok) return publishFile(ctx, f, "$name.heic", "image/heic").also { f.delete() }
+            if (ok && motion == null) return publishFile(ctx, f, "$name.heic", "image/heic").also { f.delete() }
+            f.delete()
         }
         val f = File(tmpDir, "$name.jpg")
         FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) }
@@ -61,6 +62,16 @@ object Saver {
             ex.setAttribute(ExifInterface.TAG_SOFTWARE, "Camera")
             if (location != null) ex.setGpsInfo(location)
             ex.saveAttributes()
+        }
+        if (motion != null) {
+            // Live Photo → Google Motion Photo (MVIMG_ name + XMP + MP4 appended).
+            val mv = File(tmpDir, "MVIMG_${stamp()}.jpg")
+            val ok = runCatching { com.brian.camera.process.MotionPhoto.combine(f, motion, mv) }.isSuccess
+            motion.delete()
+            if (ok) {
+                f.delete()
+                return publishFile(ctx, mv, mv.name, "image/jpeg").also { mv.delete() }
+            }
         }
         return publishFile(ctx, f, "$name.jpg", "image/jpeg").also { f.delete() }
     }

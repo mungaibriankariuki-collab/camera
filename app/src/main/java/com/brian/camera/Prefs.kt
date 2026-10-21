@@ -41,6 +41,10 @@ class Prefs(ctx: Context) {
 
     // Pictures
     var processing by str("processing", "Detailed") // Detailed (multi-frame) or Fast
+    var hdr by str("hdr", "Auto")             // Auto, On, Off
+    var livePhoto by bool("livePhoto", false)
+    var styleTone by int("styleTone", 0)      // -10..10, Photographic Styles
+    var styleWarmth by int("styleWarmth", 0)  // -10..10
     var heif by bool("heif", false)
     var watermark by bool("watermark", false)
     var watermarkText by str("watermarkText", "Shot on M-KOPA X30")

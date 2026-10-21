@@ -238,8 +238,15 @@ fun CameraScreen(act: MainActivity, onGallery: () -> Unit, onSettings: () -> Uni
 
     // ---- live analysis per mode ----
     val palm = remember { mutableStateOf<Palm?>(null) }
-    LaunchedEffect(mode, e.front, prefs.sceneOptimizer, prefs.scanQr, prefs.palmGesture, prefs.autoFraming, prefs.shotSuggestions, prefs.lensTool, prefs.portraitEffect, prefs.portraitStrength) {
-        listOf("scene", "qr", "palm", "portrait", "frame", "pro", "lens", "faces").forEach { e.unlisten(it) }
+    LaunchedEffect(mode, e.front, prefs.sceneOptimizer, prefs.scanQr, prefs.palmGesture, prefs.autoFraming, prefs.shotSuggestions, prefs.lensTool, prefs.portraitEffect, prefs.portraitStrength, prefs.livePhoto, prefs.hdr) {
+        listOf("scene", "qr", "palm", "portrait", "frame", "pro", "lens", "faces", "live", "hdr").forEach { e.unlisten(it) }
+        s.live.clear()
+        s.hdrNeeded = false
+        if (mode == Mode.PHOTO && prefs.livePhoto) e.listen("live", 1000L / com.brian.camera.process.MotionPhoto.FPS) { f -> s.live.add(f) }
+        if (mode == Mode.PHOTO && prefs.hdr == "Auto") e.listen("hdr", 1000) { f ->
+            val need = com.brian.camera.process.Hdr.needsHdr(f)
+            withContext(Dispatchers.Main) { s.hdrNeeded = need }
+        }
         qr = null; portraitFrame = null; hist = null; peaking = null; faceBoxes = emptyList(); hint = null
         lensBlocks = emptyList(); lensCodes = emptyList(); lensLabels = emptyList()
 
@@ -400,7 +407,8 @@ fun CameraScreen(act: MainActivity, onGallery: () -> Unit, onSettings: () -> Uni
         ) {
             val filterCm = when {
                 mode == Mode.FOOD -> Filters.food()
-                mode == Mode.PHOTO || mode == Mode.PORTRAIT || mode == Mode.NIGHT -> Filters.matrix(prefs.filter, prefs.myFilters())
+                mode == Mode.PHOTO || mode == Mode.PORTRAIT || mode == Mode.NIGHT ->
+                    Filters.combined(Filters.matrix(prefs.filter, prefs.myFilters()), Filters.style(prefs.styleTone, prefs.styleWarmth))
                 else -> null
             }
             AndroidView(
@@ -436,6 +444,8 @@ fun CameraScreen(act: MainActivity, onGallery: () -> Unit, onSettings: () -> Uni
             if (focus != null && e.evRange.last > 0 && mode != Mode.PRO) {
                 EvSlider(e.evIndex, e.evRange, Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp)) { e.setEv(it); evVisible++ }
             }
+            if (s.bursting) Text("${s.burstCount}", color = Color.White, fontSize = 64.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
+            if (e.quickTake && e.recording) Hint("QuickTake — release to stop", Modifier.align(Alignment.TopCenter).padding(top = 80.dp))
             if (countdown > 0) Text("$countdown", color = Color.White, fontSize = 96.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
             if (mode == Mode.PORTRAIT && portraitHint) Hint("Stay about 1.5 m away from the person", Modifier.align(Alignment.Center))
             hint?.let { Hint(it, Modifier.align(Alignment.BottomCenter).padding(bottom = 60.dp)) }
@@ -486,6 +496,13 @@ fun CameraScreen(act: MainActivity, onGallery: () -> Unit, onSettings: () -> Uni
                 IconButton(onClick = { panel = if (panel == "filters") null else "filters" }) {
                     Icon(Icons.Filled.FilterVintage, "Filters", tint = if (prefs.filter != "None") Amber else Color.White)
                 }
+            }
+            if (mode == Mode.PHOTO) {
+                Chip(
+                    when (prefs.hdr) { "On" -> "HDR"; "Off" -> "HDR off"; else -> if (s.hdrNeeded) "HDR A●" else "HDR A" },
+                    prefs.hdr == "On" || (prefs.hdr == "Auto" && s.hdrNeeded)
+                ) { prefs.hdr = when (prefs.hdr) { "Auto" -> "On"; "On" -> "Off"; else -> "Auto" } }
+                Chip("LIVE", prefs.livePhoto) { prefs.livePhoto = !prefs.livePhoto; e.rebind() }
             }
             if (mode == Mode.PHOTO && s.scene != null) {
                 Chip("✦ ${s.scene}", s.sceneOn) { s.sceneOn = !s.sceneOn }
@@ -552,7 +569,19 @@ fun CameraScreen(act: MainActivity, onGallery: () -> Unit, onSettings: () -> Uni
                 Box(Modifier.size(52.dp).clip(CircleShape).background(Color.DarkGray).clickable { onGallery() }) {
                     e.lastThumb?.let { Image(it.asImageBitmap(), "Gallery", Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
                 }
-                ShutterButton(mode, e.recording || s.panoRunning || s.lapseRunning || s.singleTakeRunning, e.busy != null) { shutter() }
+                ShutterButton(
+                    mode, e.recording || s.panoRunning || s.lapseRunning || s.singleTakeRunning || s.bursting, e.busy != null,
+                    onTap = { if (!e.quickTake && !s.bursting) shutter() },
+                    onHoldStart = {
+                        if (mode == Mode.PHOTO && e.busy == null) {
+                            s.recSound(true)
+                            e.quickTakeStart { uri -> if (uri != null) { e.lastUri = uri; s.loadThumb(uri) } }
+                        }
+                    },
+                    onHoldEnd = { if (e.quickTake) { e.quickTakeStop(); s.recSound(false) } },
+                    onSlideStart = { if (mode == Mode.PHOTO && e.busy == null) s.burstStart() },
+                    onSlideEnd = { s.burstStop() },
+                )
                 IconButton(onClick = { e.flip() }, modifier = Modifier.size(52.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.15f))) {
                     Icon(Icons.Filled.Cameraswitch, "Switch camera", tint = Color.White)
                 }
@@ -601,8 +630,14 @@ fun OptionRow(options: List<String>, selected: String, label: String? = null, su
     }
 }
 
+/** Tap = shoot. In Photo: hold = QuickTake video, slide left = burst (both end on release). */
 @Composable
-fun ShutterButton(mode: Mode, active: Boolean, busy: Boolean, onClick: () -> Unit) {
+fun ShutterButton(
+    mode: Mode, active: Boolean, busy: Boolean,
+    onTap: () -> Unit,
+    onHoldStart: () -> Unit = {}, onHoldEnd: () -> Unit = {},
+    onSlideStart: () -> Unit = {}, onSlideEnd: () -> Unit = {},
+) {
     val isVideo = mode.video || mode == Mode.HYPERLAPSE
     Box(
         Modifier.size(76.dp).clip(CircleShape).border(4.dp, Color.White, CircleShape).padding(7.dp).clip(CircleShape)
@@ -613,7 +648,29 @@ fun ShutterButton(mode: Mode, active: Boolean, busy: Boolean, onClick: () -> Uni
                     else -> Color.White
                 }
             )
-            .clickable(enabled = !busy) { onClick() },
+            .pointerInput(mode, busy) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    if (busy) return@awaitEachGesture
+                    var state = 0 // 0 = maybe tap, 1 = holding, 2 = sliding
+                    val start = down.position
+                    while (true) {
+                        val ev = if (state == 0) withTimeoutOrNull(450) { awaitPointerEvent() } else awaitPointerEvent()
+                        if (ev == null) { state = 1; onHoldStart(); continue }
+                        val ch = ev.changes.firstOrNull() ?: break
+                        if (!ch.pressed) break
+                        if (state != 2 && start.x - ch.position.x > 60f && mode == Mode.PHOTO) {
+                            if (state == 1) onHoldEnd()
+                            state = 2; onSlideStart()
+                        }
+                    }
+                    when (state) {
+                        0 -> onTap()
+                        1 -> onHoldEnd()
+                        else -> onSlideEnd()
+                    }
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
         if (active) Box(Modifier.size(24.dp).clip(RoundedCornerShape(4.dp)).background(Color.White))

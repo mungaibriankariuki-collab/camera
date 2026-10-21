@@ -326,7 +326,7 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
             .setResolutionSelector(rs(r, size))
             .build().also { a -> a.setAnalyzer(analysisExec) { onFrame(it) }; analysis = a }
 
-        when (mode) {
+        when (if (quickTake) Mode.VIDEO else mode) {
             Mode.PHOTO, Mode.PORTRAIT, Mode.NIGHT, Mode.FOOD, Mode.PRO -> {
                 val size = when (mode) {
                     Mode.NIGHT, Mode.PORTRAIT -> Size(3264, 2448)
@@ -351,7 +351,8 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
                 val ic = icb.build()
                 imageCapture = ic
                 cases += ic
-                optional = analysisOf(if (mode == Mode.PORTRAIT) Size(640, 480) else Size(640, 480))
+                // Live Photos need a sharper stream to build the clip from.
+                optional = analysisOf(if (mode == Mode.PHOTO && prefs.livePhoto) Size(960, 720) else Size(640, 480))
             }
             Mode.LENS, Mode.PANORAMA -> cases += analysisOf(Size(1280, 960))
             Mode.HYPERLAPSE -> cases += analysisOf(Size(1920, 1080), AspectRatio.RATIO_16_9)
@@ -501,6 +502,38 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
         val b = FocusMeteringAction.Builder(pt, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
         if (lock) b.disableAutoCancel() else b.setAutoCancelDuration(5, java.util.concurrent.TimeUnit.SECONDS)
         cam.cameraControl.startFocusAndMetering(b.build())
+    }
+
+    /** Sets exposure compensation and waits for auto-exposure to settle (HDR brackets). */
+    suspend fun setEvAndWait(i: Int) {
+        val cam = camera ?: return
+        val idx = i.coerceIn(evRange.first, evRange.last)
+        evIndex = idx
+        kotlinx.coroutines.withTimeoutOrNull(1500) {
+            suspendCancellableCoroutine<Unit> { cont ->
+                val f = cam.cameraControl.setExposureCompensationIndex(idx)
+                f.addListener({ if (cont.isActive) cont.resume(Unit) }, mainExec)
+            }
+        }
+        kotlinx.coroutines.delay(120)
+    }
+
+    // ---- QuickTake: hold the shutter in Photo to record ----
+    var quickTake by mutableStateOf(false)
+        private set
+
+    fun quickTakeStart(onDone: (Uri?) -> Unit) {
+        if (mode != Mode.PHOTO || recording) return
+        quickTake = true
+        rebind()
+        startRecording(onDone)
+    }
+
+    fun quickTakeStop() {
+        if (!quickTake) return
+        stopRecording()
+        // Give the recorder a moment to finalize before switching back to photo.
+        main.postDelayed({ quickTake = false; rebind() }, 700)
     }
 
     fun setEv(i: Int) {

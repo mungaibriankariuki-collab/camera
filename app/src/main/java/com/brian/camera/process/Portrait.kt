@@ -16,7 +16,7 @@ import java.nio.ByteOrder
 
 /** Portrait: cut the person out with ML Kit selfie segmentation, then treat the background. */
 object Portrait {
-    val effects = listOf("Blur", "Big circle", "Studio", "Mono", "Color point")
+    val effects = listOf("Blur", "Big circle", "Studio", "Stage", "Stage mono", "High-key mono", "Mono", "Color point")
 
     private val stream by lazy {
         Segmentation.getClient(SelfieSegmenterOptions.Builder().setDetectorMode(SelfieSegmenterOptions.STREAM_MODE).build())
@@ -74,16 +74,22 @@ object Portrait {
         val bg: Bitmap = when (effect) {
             "Studio" -> Img.applyMatrix(Img.cheapBlur(src, shrink / 2 + 2), Filters.offset(-70f, -70f, -70f).also { it.postConcat(Filters.contrast(1.1f)) })
             "Mono" -> Img.applyMatrix(Img.cheapBlur(src, shrink), Filters.sat(0f))
+            "Stage", "Stage mono" -> Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { it.eraseColor(Color.BLACK) }
+            "High-key mono" -> Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { it.eraseColor(Color.WHITE) }
             "Color point" -> Img.applyMatrix(src, Filters.sat(0f))
             "Big circle" -> bokeh(src, shrink)
             else -> Img.cheapBlur(src, shrink)
         }.copy(Bitmap.Config.ARGB_8888, true)
 
         // Person = original pixels masked by alpha.
-        val fg = src.copy(Bitmap.Config.ARGB_8888, true)
+        val fg = when (effect) {
+            "Stage mono" -> Img.applyMatrix(src, Filters.sat(0f).also { it.postConcat(Filters.contrast(1.15f)) })
+            "High-key mono" -> Img.applyMatrix(src, Filters.sat(0f).also { it.postConcat(Filters.offset(18f, 18f, 18f)); it.postConcat(Filters.contrast(1.1f)) })
+            else -> src.copy(Bitmap.Config.ARGB_8888, true)
+        }
         Canvas(fg).drawBitmap(alpha, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) })
         val c = Canvas(bg)
-        if (effect == "Studio") {
+        if (effect == "Studio" || effect == "Stage") {
             // Gentle key light on the subject.
             c.drawBitmap(fg, 0f, 0f, Paint().apply { colorFilter = ColorMatrixColorFilter(Filters.offset(10f, 10f, 10f)) })
         } else {

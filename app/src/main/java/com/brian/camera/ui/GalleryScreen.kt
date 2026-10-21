@@ -143,6 +143,7 @@ fun GalleryScreen(act: MainActivity, onBack: () -> Unit) {
                 Box(Modifier.padding(1.dp).aspectRatio(1f).background(Color(0xFF1A1A1A)).clickable { open = i }) {
                     bmp?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
                     if (m.video) Icon(Icons.Filled.PlayCircle, null, tint = Color.White, modifier = Modifier.align(Alignment.Center))
+                    if (m.name.startsWith("MVIMG_")) Text("LIVE", color = Amber, fontSize = 10.sp, modifier = Modifier.align(Alignment.TopStart).padding(3.dp))
                     if (m.name.startsWith("ST_")) Text("ST", color = Amber, fontSize = 10.sp, modifier = Modifier.align(Alignment.TopEnd).padding(3.dp))
                 }
             }
@@ -157,6 +158,7 @@ private fun Viewer(act: MainActivity, items: List<Media>, start: Int, onClose: (
     val scope = rememberCoroutineScope()
     var lensText by remember { mutableStateOf<Pair<String, String>?>(null) }
     var info by remember { mutableStateOf<String?>(null) }
+    var livePlay by remember { mutableStateOf<Uri?>(null) }
     val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
         if (it.resultCode == Activity.RESULT_OK) { onChanged(); onClose() }
     }
@@ -247,11 +249,33 @@ private fun Viewer(act: MainActivity, items: List<Media>, start: Int, onClose: (
                         }
                     }
                 }
+                if (cur.name.startsWith("MVIMG_")) Chip("▶ Live", true) {
+                    scope.launch {
+                        val f = withContext(Dispatchers.IO) {
+                            runCatching {
+                                val bytes = act.contentResolver.openInputStream(cur.uri)!!.use { it.readBytes() }
+                                com.brian.camera.process.MotionPhoto.extract(bytes, File(act.cacheDir, "live_play.mp4"))
+                            }.getOrNull()
+                        }
+                        if (f != null) livePlay = Uri.fromFile(f) else android.widget.Toast.makeText(act, "No motion in this photo", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
                 Chip("Info", false) { info = exifSummary(act, cur) }
             }
         }
 
         lensText?.let { (t, tool) -> LensResultSheet(act, t, tool) { lensText = null } }
+        livePlay?.let { u ->
+            BackHandler { livePlay = null }
+            Box(Modifier.fillMaxSize().background(Color.Black).clickable { livePlay = null }) {
+                AndroidView(factory = { ctx ->
+                    VideoView(ctx).apply {
+                        setVideoURI(u)
+                        setOnPreparedListener { it.isLooping = true; start() }
+                    }
+                }, modifier = Modifier.fillMaxSize())
+            }
+        }
         info?.let { txt ->
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)).clickable { info = null }, contentAlignment = Alignment.Center) {
                 Text(txt, color = Color.White, fontSize = 14.sp, modifier = Modifier.padding(24.dp))

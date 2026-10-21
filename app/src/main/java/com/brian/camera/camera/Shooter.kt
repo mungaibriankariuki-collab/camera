@@ -59,6 +59,20 @@ class Shooter(private val e: CameraEngine) {
 
     companion object { const val DETAIL_FRAMES = 4 }
 
+    /** Auto HDR: set from the preview when highlights clip or shadows crush. */
+    var hdrNeeded by mutableStateOf(false)
+    fun hdrActive() = e.mode == Mode.PHOTO && !(prefs.flash == 2 && !e.front) &&
+        (prefs.hdr == "On" || (prefs.hdr == "Auto" && hdrNeeded))
+    fun autoNight() = e.mode == Mode.PHOTO && prefs.processing == "Detailed" && sceneOn && prefs.sceneOptimizer && scene == "Night"
+
+    // Live Photos
+    val live = com.brian.camera.process.MotionPhoto.Recorder()
+    private var pendingLive: kotlinx.coroutines.CompletableDeferred<List<ByteArray>>? = null
+
+    // Burst
+    var bursting by mutableStateOf(false)
+    var burstCount by mutableStateOf(0)
+
     private fun click() { if (prefs.shutterSound) runCatching { sound.play(MediaActionSound.SHUTTER_CLICK) } }
     fun recSound(start: Boolean) {
         if (prefs.shutterSound) runCatching { sound.play(if (start) MediaActionSound.START_VIDEO_RECORDING else MediaActionSound.STOP_VIDEO_RECORDING) }
@@ -67,7 +81,7 @@ class Shooter(private val e: CameraEngine) {
     /** True when a plain photo can be saved straight from the camera with no editing. */
     private fun plainPhoto(): Boolean =
         e.mode == Mode.PHOTO && prefs.filter == "None" && !prefs.watermark && !prefs.heif && prefs.ratio != "1:1" &&
-            !(sceneOn && prefs.sceneOptimizer && scene != null)
+            !(sceneOn && prefs.sceneOptimizer && scene != null) && !prefs.livePhoto && prefs.styleTone == 0 && prefs.styleWarmth == 0
 
     fun photo() {
         if (e.busy != null) return
@@ -75,12 +89,17 @@ class Shooter(private val e: CameraEngine) {
             try {
                 val frontFlash = e.front && prefs.flash == 2
                 if (frontFlash) { e.screenFlash = true; delay(350) }
+                pendingLive = if (e.mode == Mode.PHOTO && prefs.livePhoto) {
+                    kotlinx.coroutines.CompletableDeferred<List<ByteArray>>().also { d -> live.snap { d.complete(it) } }
+                } else null
                 when (e.mode) {
                     Mode.NIGHT -> night()
                     Mode.PORTRAIT -> processed("PORTRAIT") { Portrait.apply(it, prefs.portraitEffect, prefs.portraitStrength) }
                     Mode.FOOD -> processed("FOOD") { food(it) }
                     Mode.PRO -> if (e.proRaw && e.caps?.rawCameraId != null && !e.front) raw() else if (prefs.heif || prefs.watermark) processed("IMG") { it } else plain()
                     else -> when {
+                        autoNight() -> night()
+                        hdrActive() -> hdr()
                         e.mode == Mode.PHOTO && prefs.processing == "Detailed" && !(prefs.flash == 2 && !e.front) -> detailed()
                         plainPhoto() && e.extraZoom <= 1.01f -> plain()
                         else -> processed("IMG") { Img.digitalZoom(it, e.extraZoom) }
@@ -119,16 +138,23 @@ class Shooter(private val e: CameraEngine) {
     }
 
     /** Shared last steps for every processed photo. */
-    private fun finishAndSave(src: Bitmap, prefix: String, allowFilter: Boolean = true, enhance: Boolean = true): Uri? {
+    private suspend fun finishAndSave(src: Bitmap, prefix: String, allowFilter: Boolean = true, enhance: Boolean = true): Uri? {
         var bmp = src
         if (enhance && prefs.processing == "Detailed") bmp = Img.enhance(bmp, 0.35f, 0.15f)
         if (prefs.ratio == "1:1" && e.mode == Mode.PHOTO) bmp = Img.cropRatio(bmp, 1, 1)
         if (allowFilter) {
             Filters.matrix(prefs.filter, prefs.myFilters())?.let { bmp = Img.applyMatrix(bmp, it) }
             if (sceneOn && prefs.sceneOptimizer && e.mode == Mode.PHOTO) scene?.let { s -> Filters.scene(s)?.let { bmp = Img.applyMatrix(bmp, it) } }
+            Filters.style(prefs.styleTone, prefs.styleWarmth)?.let { bmp = Img.applyMatrix(bmp, it) }
         }
         if (prefs.watermark) bmp = watermark(bmp)
-        val uri = Saver.saveBitmap(ctx, bmp, prefix, prefs.heif, if (prefs.location) e.location else null)
+        // Live Photo: wait for the 1.5 s after the shot, then build the clip.
+        val motion = pendingLive?.let { d ->
+            pendingLive = null
+            val frames = kotlinx.coroutines.withTimeoutOrNull(5000) { d.await() }
+            frames?.let { com.brian.camera.process.MotionPhoto.encode(it, File(ctx.cacheDir, "live_${System.nanoTime()}.mp4")) }
+        }
+        val uri = Saver.saveBitmap(ctx, bmp, prefix, prefs.heif, if (prefs.location) e.location else null, motion)
         e.lastThumb = Bitmap.createScaledBitmap(bmp, 160, (160f * bmp.height / bmp.width).toInt().coerceAtLeast(1), true)
         return uri
     }
@@ -176,6 +202,60 @@ class Shooter(private val e: CameraEngine) {
             e.busy = null
         }
     }
+
+    // ---- Smart HDR: under / normal / over brackets fused ----
+    private suspend fun hdr() {
+        val r = e.evRange
+        val step = if (e.evStep > 0f) Math.round(1f / e.evStep) else 0
+        val d = minOf(2 * step, r.last, -r.first)
+        if (d <= 0) { detailed(); return }
+        val ev = e.evIndex
+        click()
+        e.busy = "HDR…"
+        val zoomExtra = e.extraZoom
+        try {
+            val normal = e.takeToBitmap()
+            e.setEvAndWait(ev - d)
+            val under = e.takeToBitmap()
+            e.setEvAndWait(ev + d)
+            val over = e.takeToBitmap()
+            e.setEvAndWait(ev)
+            e.busy = "Processing…"
+            val uri = withContext(Dispatchers.Default) {
+                var bmp = com.brian.camera.process.Hdr.fuse(under, normal, over)
+                under.recycle(); over.recycle(); normal.recycle()
+                bmp = Img.digitalZoom(bmp, zoomExtra)
+                bmp = Img.enhance(bmp, 0.5f, 0.18f)
+                if (e.front && prefs.mirrorSelfie) bmp = Img.mirror(bmp)
+                finishAndSave(bmp, "HDR", enhance = false)
+            }
+            done(uri, null)
+        } finally {
+            e.setEv(ev)
+            e.busy = null
+        }
+    }
+
+    // ---- Burst: keep shooting while the shutter is slid left ----
+    fun burstStart() {
+        if (bursting || e.mode != Mode.PHOTO) return
+        bursting = true
+        burstCount = 0
+        val stamp = Saver.stamp()
+        e.scope.launch {
+            while (bursting && burstCount < 100) {
+                click()
+                val u = runCatching { e.takeToGallery("BURST_${stamp}_%03d".format(burstCount + 1)) }.getOrNull() ?: break
+                burstCount++
+                e.lastUri = u
+            }
+            bursting = false
+            e.lastUri?.let { loadThumb(it) }
+            if (burstCount > 0) e.toast("Burst: $burstCount photos")
+        }
+    }
+
+    fun burstStop() { bursting = false }
 
     // ---- Night ----
     private suspend fun night() {

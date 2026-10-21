@@ -78,6 +78,22 @@ fun FilterStrip(act: MainActivity, onClose: () -> Unit) {
             (Filters.names + mine.map { it.first }).forEach { n -> Chip(n, prefs.filter == n) { prefs.filter = n } }
             Chip("+ My filter", false) { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
         }
+        // Photographic Styles
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Tone", color = Color.White, fontSize = 12.sp, modifier = Modifier.width(56.dp))
+            Slider(prefs.styleTone.toFloat(), { prefs.styleTone = Math.round(it) }, valueRange = -10f..10f, steps = 19, modifier = Modifier.weight(1f))
+            Text("${prefs.styleTone}", color = Amber, fontSize = 12.sp, modifier = Modifier.width(28.dp))
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Warmth", color = Color.White, fontSize = 12.sp, modifier = Modifier.width(56.dp))
+            Slider(prefs.styleWarmth.toFloat(), { prefs.styleWarmth = Math.round(it) }, valueRange = -10f..10f, steps = 19, modifier = Modifier.weight(1f))
+            Text("${prefs.styleWarmth}", color = Amber, fontSize = 12.sp, modifier = Modifier.width(28.dp))
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
+            listOf("Standard" to (0 to 0), "Rich contrast" to (6 to 0), "Vibrant" to (3 to 2), "Warm" to (0 to 6), "Cool" to (0 to -6)).forEach { (n, v) ->
+                Chip(n, prefs.styleTone == v.first && prefs.styleWarmth == v.second) { prefs.styleTone = v.first; prefs.styleWarmth = v.second }
+            }
+        }
         if (mine.any { it.first == prefs.filter }) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                 Chip("Delete ${prefs.filter}", false) {
