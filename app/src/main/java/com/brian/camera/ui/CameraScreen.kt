@@ -382,7 +382,7 @@ fun CameraScreen(act: MainActivity, onGallery: () -> Unit, onSettings: () -> Uni
                                 val list = if (i >= 0) mainModes else modes
                                 val idx = list.indexOf(mode)
                                 val next = if (d.x < 0) idx + 1 else idx - 1
-                                if (next in list.indices) e.setMode(list[next])
+                                if (next in list.indices) e.switchMode(list[next])
                             } else if (abs(d.y) > 140 && prefs.swipeToSwitch) {
                                 e.flip()
                             } else if (d.getDistance() < 24f) {
@@ -539,7 +539,7 @@ fun CameraScreen(act: MainActivity, onGallery: () -> Unit, onSettings: () -> Uni
                 Row(Modifier.fillMaxWidth().horizontalScroll(sc).padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
                     Spacer(Modifier.width(24.dp))
                     mainModes.forEach { m ->
-                        ModeLabel(m.label.uppercase(), m == mode) { e.setMode(m) }
+                        ModeLabel(m.label.uppercase(), m == mode) { e.switchMode(m) }
                     }
                     ModeLabel(if (mode.main) "MORE" else mode.label.uppercase(), !mode.main) { showMore = true }
                     Spacer(Modifier.width(24.dp))
@@ -558,7 +558,7 @@ fun CameraScreen(act: MainActivity, onGallery: () -> Unit, onSettings: () -> Uni
             }
         }
 
-        if (showMore) MoreModes(modes.filter { !it.main }, mode, { showMore = false }) { e.setMode(it); showMore = false }
+        if (showMore) MoreModes(modes.filter { !it.main }, mode, { showMore = false }) { e.switchMode(it); showMore = false }
         lensResult?.let { LensResultSheet(act, it, prefs.lensTool) { lensResult = null } }
     }
 }

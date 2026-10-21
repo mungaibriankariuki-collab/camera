@@ -75,8 +75,8 @@ class MainActivity : ComponentActivity() {
         engine = CameraEngine(this, this, prefs)
         shooter = Shooter(engine)
         when (intent?.action) {
-            MediaStore.INTENT_ACTION_VIDEO_CAMERA -> engine.setMode(Mode.VIDEO)
-            MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA -> engine.setMode(Mode.PHOTO)
+            MediaStore.INTENT_ACTION_VIDEO_CAMERA -> engine.switchMode(Mode.VIDEO)
+            MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA -> engine.switchMode(Mode.PHOTO)
         }
 
         granted = has(Manifest.permission.CAMERA)

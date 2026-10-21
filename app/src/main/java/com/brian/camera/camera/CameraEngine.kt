@@ -216,7 +216,7 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
     /** Frees the camera so RAW capture can open it directly through Camera2. */
     fun unbindAll() { provider?.unbindAll(); camera = null }
 
-    fun setMode(m: Mode) {
+    fun switchMode(m: Mode) {
         if (m == mode || recording) return
         mode = m
         prefs.lastMode = m.name
