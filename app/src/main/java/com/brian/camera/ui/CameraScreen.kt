@@ -329,7 +329,7 @@ fun CameraScreen(act: MainActivity, onGallery: () -> Unit, onSettings: () -> Uni
 
     val modes = Mode.entries.filter {
         when (it) {
-            Mode.SLOW_MO -> (caps?.slowMoFps ?: 0) > 0
+            Mode.SLOW_MO -> caps?.slowMo == true
             Mode.DUAL -> caps?.concurrent != null
             else -> true
         }
@@ -411,6 +411,7 @@ fun CameraScreen(act: MainActivity, onGallery: () -> Unit, onSettings: () -> Uni
                 },
                 modifier = Modifier.fillMaxSize()
             )
+            e.highSpeed?.let { hs -> androidx.compose.runtime.key(hs) { AndroidView(factory = { hs.texture }, modifier = Modifier.fillMaxSize()) } }
             portraitFrame?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds) }
             peaking?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds) }
 
@@ -640,6 +641,7 @@ fun ZoomRow(e: com.brian.camera.camera.CameraEngine) {
         add(1f); add(2f)
         if (e.maxZoom >= 4f) add(4f)
         if (e.maxZoom >= 8f) add(8f)
+        if (e.maxZoom >= 15f) add(15f)
     }
     Row(Modifier.padding(vertical = 4.dp).clip(RoundedCornerShape(20.dp)).background(Color.Black.copy(alpha = 0.35f)).padding(4.dp)) {
         stops.forEach { z ->

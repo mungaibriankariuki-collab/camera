@@ -52,6 +52,8 @@ fun SettingsScreen(act: MainActivity, onBack: () -> Unit, onCheck: () -> Unit) {
             Toggle("Scan QR codes", "In Photo mode", p.scanQr) { p.scanQr = it }
 
             Section("Pictures")
+            Choice("Photo processing", listOf("Detailed", "Fast"), p.processing) { p.processing = it }
+            Note(if (p.processing == "Detailed") "Detailed: stacks 4 frames, then sharpens. Takes about 2 to 4 s, much cleaner and crisper." else "Fast: one frame straight from the camera.")
             Toggle("High efficiency pictures (HEIF)", "Smaller files; location tags aren't kept", p.heif) { p.heif = it }
             Toggle("Watermark", "Adds text and the date to photos", p.watermark) { p.watermark = it }
             if (p.watermark) {

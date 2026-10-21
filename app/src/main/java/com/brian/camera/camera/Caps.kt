@@ -35,13 +35,19 @@ class Caps(
     val minFocusDist: Float,         // 0 = fixed focus
     val wbModes: IntArray,
     val slowMoFps: Int,              // 0 = no slow motion
+    val hsCameraId: String?,         // constrained high-speed video (Camera2), used for slow motion
+    val hsSize: android.util.Size?,
+    val hsFps: Int,
+    val maxJpegPixels: Int,
     val stabilization: Boolean,
     val concurrent: List<CameraInfo>?,
     val videoQualities: List<String>,
     val report: String,
 ) {
     val hasWide get() = wide != null || mainMinZoom < 0.95f
-    val pro get() = manualSensor
+    /** ISO/shutter ranges are published even without the MANUAL_SENSOR flag; many Unisoc phones still obey them. */
+    val isoShutter get() = manualSensor || (isoRange != null && exposureRange != null)
+    val slowMo get() = slowMoFps > 0 || hsFps >= 60
 
     companion object {
         @SuppressLint("RestrictedApi")
@@ -87,12 +93,13 @@ class Caps(
 
             // Ultra-wide: another back camera with a wider view than the main one.
             val mainFov = back?.let { fov(it) } ?: 0.0
+            // Any second back camera. Some phones (the X30) report bogus lens sizes for it, so don't trust the FOV.
             val wide = infos.filter { it.lensFacing == CameraSelector.LENS_FACING_BACK && it != back }
-                .filter { fov(it) > mainFov * 1.2 }
                 .maxByOrNull { fov(it) }
             val mainMinZoom = back?.zoomState?.value?.minZoomRatio ?: 1f
             val wideFactor = if (wide != null) {
-                (Math.tan(Math.toRadians(mainFov / 2)) / Math.tan(Math.toRadians(fov(wide) / 2))).toFloat().coerceIn(0.3f, 0.95f)
+                val f = (Math.tan(Math.toRadians(mainFov / 2)) / Math.tan(Math.toRadians(fov(wide) / 2))).toFloat()
+                if (f in 0.3f..0.85f) f else 0.6f
             } else mainMinZoom
 
             // Manual controls and RAW, from the main back camera.
@@ -103,6 +110,10 @@ class Caps(
             var exp: Range<Long>? = null
             var minFocus = 0f
             var wb = intArrayOf()
+            var hsId: String? = null
+            var hsSize: android.util.Size? = null
+            var hsFps = 0
+            var maxJpeg = 0
             back?.let { info ->
                 val c = ch(info)
                 val capsList = c.getCameraCharacteristic(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
@@ -121,8 +132,16 @@ class Caps(
                 sb.appendLine("Manual focus: ${yes(minFocus > 0f)} (min distance $minFocus)")
                 val hs = c.getCameraCharacteristic(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 hs?.let { map ->
-                    sb.appendLine("Max JPEG: ${map.getOutputSizes(ImageFormat.JPEG)?.maxByOrNull { it.width * it.height }}")
-                    sb.appendLine("High-speed video: ${map.highSpeedVideoSizes?.joinToString().orEmpty().ifEmpty { "none" }}")
+                    val jpeg = map.getOutputSizes(ImageFormat.JPEG)?.maxByOrNull { it.width * it.height }
+                    maxJpeg = jpeg?.let { it.width * it.height } ?: 0
+                    sb.appendLine("Max JPEG: $jpeg")
+                    val hsList = runCatching { map.highSpeedVideoSizes?.toList() }.getOrNull().orEmpty()
+                    val withFps = hsList.map { sz -> sz to (runCatching { map.getHighSpeedVideoFpsRangesFor(sz).maxOf { it.upper } }.getOrDefault(0)) }
+                    sb.appendLine("High-speed video: ${withFps.joinToString { "${it.first}@${it.second}" }.ifEmpty { "none" }}")
+                    // Prefer 720p at the highest rate (smooth slow motion); fall back to whatever is fastest.
+                    withFps.filter { it.second >= 60 }
+                        .sortedWith(compareByDescending<Pair<android.util.Size, Int>> { it.second }.thenBy { kotlin.math.abs(it.first.height - 720) })
+                        .firstOrNull()?.let { (sz, f) -> hsId = c.cameraId; hsSize = sz; hsFps = f }
                 }
             }
 
@@ -148,7 +167,7 @@ class Caps(
 
             sb.appendLine()
             sb.appendLine("Ultra-wide for apps: ${if (wide != null) "yes (separate camera)" else if (mainMinZoom < 0.95f) "yes (zoom ${"%.1f".format(mainMinZoom)}x)" else "no"}")
-            sb.appendLine("Slow motion: ${if (slow > 0) "$slow fps" else "no"}")
+            sb.appendLine("Slow motion: ${if (slow > 0) "$slow fps" else if (hsFps >= 60) "$hsFps fps at $hsSize (high-speed session)" else "no"}")
             sb.appendLine("Video stabilization: ${yes(stab)}")
             sb.appendLine("Video qualities: ${qualities.joinToString().ifEmpty { "-" }}")
             sb.appendLine("Front + back at once (Director's view): ${yes(conc != null)}")
@@ -165,7 +184,7 @@ class Caps(
                 sb.appendLine("Hidden camera ids: ${hidden.joinToString().ifEmpty { "none" }}")
             }
 
-            return Caps(back, front, wide, mainMinZoom, wideFactor, manual, raw, rawId, iso, exp, minFocus, wb, slow, stab, conc, qualities, sb.toString())
+            return Caps(back, front, wide, mainMinZoom, wideFactor, manual, raw, rawId, iso, exp, minFocus, wb, slow, hsId, hsSize, hsFps, maxJpeg, stab, conc, qualities, sb.toString())
         }
 
         private fun yes(b: Boolean) = if (b) "yes" else "no"

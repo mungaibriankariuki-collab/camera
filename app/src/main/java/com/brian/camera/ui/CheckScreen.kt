@@ -37,8 +37,8 @@ fun CheckScreen(e: CameraEngine, onBack: () -> Unit) {
     val c = e.caps
     val header = "${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} · ${Build.HARDWARE}"
     val summary = if (c == null) "Camera not opened yet" else buildString {
-        appendLine("Pro: ISO/shutter ${ok(c.manualSensor)} · manual focus ${ok(c.minFocusDist > 0f)} · RAW ${ok(c.raw)}")
-        appendLine("Ultra-wide: ${ok(c.hasWide)}   Slow motion: ${if (c.slowMoFps > 0) "${c.slowMoFps} fps" else "✗"}")
+        appendLine("Pro: ISO/shutter ${if (c.manualSensor) "✓" else if (c.isoShutter) "try (not officially supported)" else "✗"} · manual focus ${ok(c.minFocusDist > 0f)} · RAW ${ok(c.raw)}")
+        appendLine("Ultra-wide: ${ok(c.hasWide)}   Slow motion: ${if (c.slowMoFps > 0) "${c.slowMoFps} fps" else if (c.hsFps >= 60) "${c.hsFps} fps (${c.hsSize})" else "✗"}")
         appendLine("Video stabilization: ${ok(c.stabilization)}   Director's view: ${ok(c.concurrent != null)}")
     }
     val full = "$header\n\n$summary\n${c?.report ?: ""}"

@@ -107,5 +107,52 @@ object Img {
         return sq / n - mean * mean
     }
 
+    /**
+     * Detail pass: unsharp mask for fine edges plus a wide, gentle local-contrast ("clarity") boost.
+     * A noise gate skips tiny differences so grain isn't sharpened. Works in place, row by row.
+     */
+    fun enhance(src: Bitmap, sharpen: Float, clarity: Float): Bitmap {
+        val out = if (src.isMutable) src else src.copy(Bitmap.Config.ARGB_8888, true)
+        val w = out.width
+        val h = out.height
+        val fine = Bitmap.createScaledBitmap(Bitmap.createScaledBitmap(out, max(1, w / 2), max(1, h / 2), true), w, h, true)
+        val wide = cheapBlur(out, 24)
+        val rs = IntArray(w); val rf = IntArray(w); val rw = IntArray(w)
+        val gate = 3
+        for (y in 0 until h) {
+            out.getPixels(rs, 0, w, 0, y, w, 1)
+            fine.getPixels(rf, 0, w, 0, y, w, 1)
+            wide.getPixels(rw, 0, w, 0, y, w, 1)
+            for (x in 0 until w) {
+                val s = rs[x]; val f = rf[x]; val g = rw[x]
+                var r = 0; var gr = 0; var b = 0
+                for (ch in 0..2) {
+                    val sh = 16 - ch * 8
+                    val sv = s shr sh and 255
+                    val dv = sv - (f shr sh and 255)
+                    val wv = sv - (g shr sh and 255)
+                    val d = if (dv > gate || dv < -gate) dv * sharpen else 0f
+                    // Less clarity near pure black/white so highlights and shadows don't clip.
+                    val k = 1f - kotlin.math.abs(sv - 128) / 170f
+                    val v = clamp((sv + d + wv * clarity * k).toInt())
+                    when (ch) { 0 -> r = v; 1 -> gr = v; else -> b = v }
+                }
+                rs[x] = (s and -0x1000000) or (r shl 16) or (gr shl 8) or b
+            }
+            out.setPixels(rs, 0, w, 0, y, w, 1)
+        }
+        fine.recycle(); wide.recycle()
+        return out
+    }
+
+    /** Crops the centre by [factor] and scales it back up (digital zoom past the camera's limit). */
+    fun digitalZoom(src: Bitmap, factor: Float): Bitmap {
+        if (factor <= 1.01f) return src
+        val cw = (src.width / factor).toInt()
+        val ch = (src.height / factor).toInt()
+        val crop = Bitmap.createBitmap(src, (src.width - cw) / 2, (src.height - ch) / 2, cw, ch)
+        return Bitmap.createScaledBitmap(crop, src.width, src.height, true).copy(Bitmap.Config.ARGB_8888, true)
+    }
+
     fun clamp(v: Int) = if (v < 0) 0 else if (v > 255) 255 else v
 }

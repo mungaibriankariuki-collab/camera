@@ -94,7 +94,17 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
     var useWide by mutableStateOf(false)
         private set
     var zoom by mutableFloatStateOf(1f)
-    var maxZoom by mutableFloatStateOf(8f)
+    var maxZoom by mutableFloatStateOf(15f)
+    private var camMaxZoom = 10f
+
+    /** Digital zoom past the camera's own limit: the preview is scaled and the photo is cropped. */
+    var extraZoom by mutableFloatStateOf(1f)
+        private set
+    private fun setExtra(x: Float) {
+        extraZoom = x
+        previewView.scaleX = x
+        previewView.scaleY = x
+    }
     var torch by mutableStateOf(false)
     var evIndex by mutableIntStateOf(0)
     var evRange by mutableStateOf(0..0)
@@ -132,6 +142,16 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
     private var videoCapture2: VideoCapture<Recorder>? = null
     private var analysis: ImageAnalysis? = null
     private var activeRecordings = mutableListOf<Recording>()
+
+    /** Camera2 high-speed path for slow motion (null when CameraX is in charge). */
+    var highSpeed by mutableStateOf<HighSpeed?>(null)
+        private set
+    private var hsDone: ((Uri?) -> Unit)? = null
+    private val hsTick = object : Runnable {
+        override fun run() { if (recording) { recSeconds++; main.postDelayed(this, 1000) } }
+    }
+
+    private fun closeHighSpeed() { highSpeed?.close(); highSpeed = null }
 
     // ---- frame hub: one analysis stream shared by every live feature ----
     class Listener(val intervalMs: Long, val fn: suspend (Bitmap) -> Unit) {
@@ -214,7 +234,7 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
     }
 
     /** Frees the camera so RAW capture can open it directly through Camera2. */
-    fun unbindAll() { provider?.unbindAll(); camera = null }
+    fun unbindAll() { closeHighSpeed(); provider?.unbindAll(); camera = null }
 
     fun switchMode(m: Mode) {
         if (m == mode || recording) return
@@ -276,10 +296,17 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
         val p = provider ?: return
         if (recording) return
         p.unbindAll()
+        closeHighSpeed()
+        setExtra(1f)
         camera = null; imageCapture = null; videoCapture = null; videoCapture2 = null; analysis = null
         latestFrame = null
         bindError = null
         if (mode == Mode.DOC) return
+        val hc = caps
+        if (mode == Mode.SLOW_MO && !front && hc != null && hc.slowMoFps == 0 && hc.hsCameraId != null && hc.hsSize != null) {
+            highSpeed = HighSpeed(ctx, hc.hsCameraId, hc.hsSize, hc.hsFps) { msg -> main.post { bindError = msg } }
+            return
+        }
         if (mode == Mode.DUAL) { bindDual(p); return }
 
         val ratio = aspect()
@@ -305,11 +332,23 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
                     Mode.NIGHT, Mode.PORTRAIT -> Size(3264, 2448)
                     else -> if (ratio == AspectRatio.RATIO_16_9) Size(4000, 2250) else Size(4000, 3000)
                 }
-                val ic = ImageCapture.Builder()
-                    .setCaptureMode(if (mode == Mode.PRO) ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY else ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                val detailed = prefs.processing == "Detailed"
+                val icb = ImageCapture.Builder()
+                    .setCaptureMode(
+                        if (mode == Mode.PRO || (!detailed && mode == Mode.PHOTO)) ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+                        else ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+                    )
                     .setResolutionSelector(rs(ratio, size, highest = mode == Mode.PHOTO && prefs.highRes && !front))
                     .setFlashMode(flashMode())
-                    .build()
+                    .setJpegQuality(98)
+                // Keep fine texture: light in-camera noise reduction (frame stacking removes the noise) and best edges.
+                Camera2Interop.Extender(icb)
+                    .setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
+                    .setCaptureRequestOption(
+                        CaptureRequest.NOISE_REDUCTION_MODE,
+                        if (detailed && mode != Mode.PRO) CaptureRequest.NOISE_REDUCTION_MODE_FAST else CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+                    )
+                val ic = icb.build()
                 imageCapture = ic
                 cases += ic
                 optional = analysisOf(if (mode == Mode.PORTRAIT) Size(640, 480) else Size(640, 480))
@@ -392,8 +431,9 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
     private fun afterBind() {
         val cam = camera ?: return
         cam.cameraInfo.zoomState.observe(owner) { z ->
-            maxZoom = z.maxZoomRatio
-            zoom = if (useWide) (caps?.wideFactor ?: 0.6f) * z.zoomRatio else z.zoomRatio
+            camMaxZoom = z.maxZoomRatio
+            maxZoom = if (useWide) z.maxZoomRatio * (caps?.wideFactor ?: 0.6f) else maxOf(z.maxZoomRatio, ZOOM_CAP)
+            zoom = if (useWide) (caps?.wideFactor ?: 0.6f) * z.zoomRatio else z.zoomRatio * extraZoom
         }
         val ex = cam.cameraInfo.exposureState
         evRange = if (ex.isExposureCompensationSupported) ex.exposureCompensationRange.lower..ex.exposureCompensationRange.upper else 0..0
@@ -436,8 +476,18 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
                 return
             }
         }
-        camera?.cameraControl?.setZoomRatio(level.coerceIn(c?.mainMinZoom ?: 1f, maxZoom))
+        val l = level.coerceIn(c?.mainMinZoom ?: 1f, maxZoom)
+        if (l > camMaxZoom && !useWide) {
+            setExtra(l / camMaxZoom)
+            camera?.cameraControl?.setZoomRatio(camMaxZoom)
+        } else {
+            setExtra(1f)
+            camera?.cameraControl?.setZoomRatio(l)
+        }
+        zoom = l
     }
+
+    companion object { const val ZOOM_CAP = 15f }
 
     fun minZoomLevel(): Float {
         val c = caps ?: return 1f
@@ -531,6 +581,14 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
     // ---- video ----
     @SuppressLint("MissingPermission")
     fun startRecording(onDone: (Uri?) -> Unit) {
+        highSpeed?.let { hs ->
+            hs.startRecording(File(ctx.cacheDir, "hs_${System.nanoTime()}.mp4"))
+            hsDone = onDone
+            recording = true
+            recSeconds = 0
+            main.postDelayed(hsTick, 1000)
+            return
+        }
         val vc = videoCapture ?: return
         val audio = prefs.recordAudio && mode != Mode.SLOW_MO &&
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -574,6 +632,26 @@ class CameraEngine(val ctx: Context, private val owner: LifecycleOwner, val pref
     }
 
     fun stopRecording() {
+        highSpeed?.let { hs ->
+            if (!recording) return
+            recording = false
+            main.removeCallbacks(hsTick)
+            val done = hsDone
+            hsDone = null
+            busy = "Saving slow motion…"
+            hs.stopRecording { raw ->
+                scope.launch(Dispatchers.IO) {
+                    var uri: Uri? = null
+                    if (raw != null) {
+                        val out = File(ctx.cacheDir, "SLOWMO_${Saver.stamp()}.mp4")
+                        if (com.brian.camera.process.SlowMo.stretch(raw, out, hs.fps / 30.0)) uri = Saver.publishFile(ctx, out, out.name, "video/mp4")
+                        raw.delete(); out.delete()
+                    }
+                    launch(Dispatchers.Main) { busy = null; done?.invoke(uri) }
+                }
+            }
+            return
+        }
         activeRecordings.forEach { runCatching { it.stop() } }
         activeRecordings.clear()
         recording = false

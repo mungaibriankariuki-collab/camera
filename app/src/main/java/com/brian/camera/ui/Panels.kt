@@ -155,11 +155,14 @@ fun ProPanel(e: CameraEngine, peaking: Boolean, setPeaking: (Boolean) -> Unit) {
     val caps = e.caps
     var tab by remember { mutableStateOf("ISO") }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        val ignored = (e.proIso != null && e.liveIso > 0 && kotlin.math.abs(e.liveIso - e.proIso!!) > e.proIso!! / 4) ||
+            (e.proShutter != null && e.liveShutter > 0 && kotlin.math.abs(e.liveShutter - e.proShutter!!) > e.proShutter!! / 4)
+        if (ignored) Text("The camera is ignoring this manual setting", color = Color(0xFFFF8A80), fontSize = 12.sp)
         Text(
-            "ISO ${e.proIso ?: e.liveIso}   ${Caps.fmtShutter(e.proShutter ?: e.liveShutter.coerceAtLeast(1))}   EV ${"%.1f".format(e.evIndex * e.evStep)}",
+            "ISO ${e.liveIso}   ${Caps.fmtShutter(e.proShutter ?: e.liveShutter.coerceAtLeast(1))}   EV ${"%.1f".format(e.evIndex * e.evStep)}",
             color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp
         )
-        val manual = caps?.manualSensor == true
+        val manual = caps?.isoShutter == true
         when (tab) {
             "ISO" -> if (manual) {
                 val stops = isoStops.filter { caps?.isoRange?.contains(it) ?: true }

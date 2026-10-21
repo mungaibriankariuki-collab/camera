@@ -40,6 +40,7 @@ class Prefs(ctx: Context) {
     var scanQr by bool("scanQr", true)
 
     // Pictures
+    var processing by str("processing", "Detailed") // Detailed (multi-frame) or Fast
     var heif by bool("heif", false)
     var watermark by bool("watermark", false)
     var watermarkText by str("watermarkText", "Shot on M-KOPA X30")

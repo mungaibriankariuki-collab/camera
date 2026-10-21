@@ -51,12 +51,12 @@ class Night(private val first: Bitmap) {
     }
 
     /** Averages and brightens. [lift] 0..1: how much to open the shadows. */
-    fun finish(lift: Float = 0.6f): Bitmap {
+    fun finish(lift: Float = 0.6f, curve: Boolean = true): Bitmap {
         val gamma = 1f - 0.35f * lift
         val lut = IntArray(256) { v ->
             val t = (v / 255f).pow(gamma)
             // Soft S-curve keeps blacks from going grey.
-            val s = t * t * (3 - 2 * t) * 0.25f + t * 0.75f
+            val s = if (curve) t * t * (3 - 2 * t) * 0.25f + t * 0.75f else t
             (s * 255).toInt().coerceIn(0, 255)
         }
         val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)

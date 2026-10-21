@@ -57,6 +57,8 @@ class Shooter(private val e: CameraEngine) {
     var lapseFrames by mutableStateOf(0)
     var singleTakeRunning by mutableStateOf(false)
 
+    companion object { const val DETAIL_FRAMES = 4 }
+
     private fun click() { if (prefs.shutterSound) runCatching { sound.play(MediaActionSound.SHUTTER_CLICK) } }
     fun recSound(start: Boolean) {
         if (prefs.shutterSound) runCatching { sound.play(if (start) MediaActionSound.START_VIDEO_RECORDING else MediaActionSound.STOP_VIDEO_RECORDING) }
@@ -78,7 +80,11 @@ class Shooter(private val e: CameraEngine) {
                     Mode.PORTRAIT -> processed("PORTRAIT") { Portrait.apply(it, prefs.portraitEffect, prefs.portraitStrength) }
                     Mode.FOOD -> processed("FOOD") { food(it) }
                     Mode.PRO -> if (e.proRaw && e.caps?.rawCameraId != null && !e.front) raw() else if (prefs.heif || prefs.watermark) processed("IMG") { it } else plain()
-                    else -> if (plainPhoto() || (prefs.highRes && e.mode == Mode.PHOTO)) plain() else processed("IMG") { it }
+                    else -> when {
+                        e.mode == Mode.PHOTO && prefs.processing == "Detailed" && !(prefs.flash == 2 && !e.front) -> detailed()
+                        plainPhoto() && e.extraZoom <= 1.01f -> plain()
+                        else -> processed("IMG") { Img.digitalZoom(it, e.extraZoom) }
+                    }
                 }
                 e.screenFlash = false
             } catch (t: Throwable) {
@@ -113,8 +119,9 @@ class Shooter(private val e: CameraEngine) {
     }
 
     /** Shared last steps for every processed photo. */
-    private fun finishAndSave(src: Bitmap, prefix: String, allowFilter: Boolean = true): Uri? {
+    private fun finishAndSave(src: Bitmap, prefix: String, allowFilter: Boolean = true, enhance: Boolean = true): Uri? {
         var bmp = src
+        if (enhance && prefs.processing == "Detailed") bmp = Img.enhance(bmp, 0.35f, 0.15f)
         if (prefs.ratio == "1:1" && e.mode == Mode.PHOTO) bmp = Img.cropRatio(bmp, 1, 1)
         if (allowFilter) {
             Filters.matrix(prefs.filter, prefs.myFilters())?.let { bmp = Img.applyMatrix(bmp, it) }
@@ -139,6 +146,34 @@ class Shooter(private val e: CameraEngine) {
                 if (Build.VERSION.SDK_INT >= 29) ctx.contentResolver.loadThumbnail(uri, Size(240, 240), null) else null
             }.getOrNull()
             if (t != null) withContext(Dispatchers.Main) { e.lastThumb = t }
+        }
+    }
+
+    // ---- Detailed photo: stack a burst, then sharpen ----
+    private suspend fun detailed() {
+        click()
+        val zoomExtra = e.extraZoom
+        val first = e.takeToBitmap()
+        e.screenFlash = false
+        var stack: Night? = withContext(Dispatchers.Default) { Night(first) }
+        repeat(DETAIL_FRAMES - 1) {
+            val f = runCatching { e.takeToBitmap() }.getOrNull() ?: return@repeat
+            withContext(Dispatchers.Default) { stack!!.add(f) }
+        }
+        e.busy = "Processing…"
+        try {
+            val uri = withContext(Dispatchers.Default) {
+                var bmp = stack!!.finish(lift = 0f, curve = false)
+                stack = null
+                bmp = Img.digitalZoom(bmp, zoomExtra)
+                // More sharpening when zoomed in, since the crop was enlarged.
+                bmp = Img.enhance(bmp, if (zoomExtra > 1.01f || e.zoom >= 2f) 0.9f else 0.6f, 0.22f)
+                if (e.front && prefs.mirrorSelfie) bmp = Img.mirror(bmp)
+                finishAndSave(bmp, "IMG", enhance = false)
+            }
+            done(uri, null)
+        } finally {
+            e.busy = null
         }
     }
 
