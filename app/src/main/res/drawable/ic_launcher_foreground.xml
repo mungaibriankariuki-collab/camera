@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Camera body with a lens ring and an amber flash dot. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#F3F4F6" android:pathData="M30,40h12l4,-6h16l4,6h12a4,4 0,0 1,4 4v26a4,4 0,0 1,-4 4h-48a4,4 0,0 1,-4 -4v-26a4,4 0,0 1,4 -4z" />
+    <path android:fillColor="#111827" android:pathData="M54,57m-12,0a12,12 0,1 1,24 0a12,12 0,1 1,-24 0" />
+    <path android:fillColor="#38BDF8" android:pathData="M54,57m-8,0a8,8 0,1 1,16 0a8,8 0,1 1,-16 0" />
+    <path android:fillColor="#F59E0B" android:pathData="M73,46m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+</vector>
